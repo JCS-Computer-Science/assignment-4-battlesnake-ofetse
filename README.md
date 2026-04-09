@@ -25,3 +25,4 @@ To verify that your server is live, point a new browser tab to the url discussed
 {"apiversion":"1","author":"","color":"#888888","head":"default","tail":"default"}
 ```
 
+]
