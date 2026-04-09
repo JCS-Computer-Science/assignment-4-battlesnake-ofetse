@@ -1,62 +1,62 @@
 export default function move(gameState){
-    let moveSafety = {
+    let directionSafety = {
         up: true,
         down: true,
         left: true,
         right: true
     };
 
-    const myHead = gameState.you.body[0];
-    const myNeck = gameState.you.body[1];
+    const head = gameState.you.body[0];
+    const neck = gameState.you.body[1];
 
-    if (myNeck.x < myHead.x) {
-         moveSafety.left = false;
+    if (neck.x < head.x) {
+         directionSafety.left = false;
 
-        } else if (myNeck.x > myHead.x) { 
-             moveSafety.right = false;
-             } else if (myNeck.y < myHead.y) {
-                moveSafety.down = false;
-                } else if (myNeck.y > myHead.y) {
-                    moveSafety.up = false;
+        } else if (neck.x > head.x) { 
+             directionSafety.right = false;
+             } else if (neck.y < head.y) {
+                directionSafety.down = false;
+                } else if (neck.y > head.y) {
+                    directionSafety.up = false;
     }
 
     const boardWidth = gameState.board.width;
     const boardHeight = gameState.board.height;
 
-    if (myHead.x === 0) moveSafety.left = false;
-    if (myHead.x === boardWidth - 1)  moveSafety.right = false;
-    if (myHead.y === 0) moveSafety.down = false;
-    if (myHead.y === boardHeight - 1) moveSafety.up = false;
+    if (head.x === 0) directionSafety.left = false;
+    if (head.x === boardWidth - 1)  directionSafety.right = false;
+    if (head.y === 0) directionSafety.down = false;
+    if (head.y === boardHeight - 1) directionSafety.up = false;
 
-    const candidates = {
-        up:    { x: myHead.x, y: myHead.y + 1 },
-        down:  { x: myHead.x, y: myHead.y - 1 },
-        left:  { x: myHead.x - 1, y: myHead.y },
-        right: { x: myHead.x + 1, y: myHead.y },
+    const possibleMoves = {
+        up:    { x: head.x, y: head.y + 1 },
+        down:  { x: head.x, y: head.y - 1 },
+        left:  { x: head.x - 1, y: head.y },
+        right: { x: head.x + 1, y: head.y },
     };
 
-
-for (const [dir, pos] of Object.entries(candidates)) {
-        if (!moveSafety[dir]) continue; 
-        const hitsBody = gameState.you.body.some(
+    for (const [dir, pos] of Object.entries(possibleMoves)) {
+        if (!directionSafety[dir]) continue; 
+        const selfCollision = gameState.you.body.some(
             segment => segment.x === pos.x && segment.y === pos.y
         );
-        if (hitsBody) moveSafety[dir] = false;
+        if (selfCollision) directionSafety[dir] = false;
     }
-     for (const snake of gameState.board.snakes) {
-        for (const [dir, pos] of Object.entries(candidates)) {
-            if (!moveSafety[dir]) continue;
-            const hitsSnake = snake.body.some(
+
+    for (const snake of gameState.board.snakes) {
+        for (const [dir, pos] of Object.entries(possibleMoves)) {
+            if (!directionSafety[dir]) continue;
+            const snakeCollision = snake.body.some(
                 segment => segment.x === pos.x && segment.y === pos.y
             );
-
-             if (hitsSnake) moveSafety[dir] = false;
+             if (snakeCollision) directionSafety[dir] = false;
         }
     }
-     const myLength = gameState.you.body.length;
-      for (const snake of gameState.board.snakes) {
+
+    const snakeSize = gameState.you.body.length;
+    for (const snake of gameState.board.snakes) {
         if (snake.id === gameState.you.id) continue;
-        if (snake.body.length < myLength) continue;
+        if (snake.body.length < snakeSize) continue;
 
         const enemyHead = snake.body[0];
         const enemyMoves = [
@@ -66,45 +66,41 @@ for (const [dir, pos] of Object.entries(candidates)) {
             { x: enemyHead.x + 1, y: enemyHead.y     },
         ];
 
-        for (const [dir, pos] of Object.entries(candidates)) {
-
-            if (!moveSafety[dir]) continue;
+        for (const [dir, pos] of Object.entries(possibleMoves)) {
+            if (!directionSafety[dir]) continue;
             const dangerousSquare = enemyMoves.some(
                 e => e.x === pos.x && e.y === pos.y
             );
-
-            if (dangerousSquare) moveSafety[dir] = false;
+            if (dangerousSquare) directionSafety[dir] = false;
         }
     }
 
-     const safeMoves = Object.keys(moveSafety).filter(direction => moveSafety[direction]);
-    if (safeMoves.length == 0) {
+    const validMoves = Object.keys(directionSafety).filter(direction => directionSafety[direction]);
+    if (validMoves.length == 0) {
         console.log(`MOVE ${gameState.turn}: No safe moves detected! Moving down`);
         return { move: "down" };
     }
 
-
-const food = gameState.board.food;
-    let nextMove = safeMoves[Math.floor(Math.random() * safeMoves.length)];
+    const food = gameState.board.food;
+    let nextMove = validMoves[Math.floor(Math.random() * validMoves.length)];
 
     if (food.length > 0) {
-        const closestFood = food.reduce((best, f) => {
-            const dist = Math.abs(f.x - myHead.x) + Math.abs(f.y - myHead.y);
-
-             return dist < best.dist ? { food: f, dist } : best;
+        const nearestFood = food.reduce((best, f) => {
+            const dist = Math.abs(f.x - head.x) + Math.abs(f.y - head.y);
+            return dist < best.dist ? { food: f, dist } : best;
         }, { food: null, dist: Infinity }).food;
 
-        let bestDir = null;
+        let bestDirection = null;
         let bestDist = Infinity;
-        for (const dir of safeMoves) {
-            const pos = candidates[dir];
-            const dist = Math.abs(pos.x - closestFood.x) + Math.abs(pos.y - closestFood.y);
+        for (const dir of validMoves) {
+            const pos = possibleMoves[dir];
+            const dist = Math.abs(pos.x - nearestFood.x) + Math.abs(pos.y - nearestFood.y);
             if (dist < bestDist) {
                 bestDist = dist;
-                bestDir = dir;
+                bestDirection = dir;
             }
         }
-        if (bestDir) nextMove = bestDir;
+        if (bestDirection) nextMove = bestDirection;
     }
 
     console.log(`MOVE ${gameState.turn}: ${nextMove}`)
