@@ -338,4 +338,5 @@ export default function move(gs) {
 //so it uses uses minimax with optimizations to choose the best move each turn. 
 // and It simulates future game states, 
 // evaluates them, and picks the safest or most strategic option.
-// the biggest issus was learing how to implement the minimax algorithm  since i had an idea of how it works since i wanted to make a simlier game for mysleft but never got to it
+// the biggest issus was learing how to implement the minimax algorithm  since i had an idea of how it works since
+//  i wanted to make a simlier game for mysleft but never got to it
