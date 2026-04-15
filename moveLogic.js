@@ -591,7 +591,10 @@ export default function move(gameState) {
     //In this case we want to filter out any of these directions for which moveSafety[direction] == false
     // TODO: Step 4 - Move towards food instead of random, to regain health and survive longer
     // gameState.board.food contains an array of food coordinates https://docs.battlesnake.com/api/objects/board 
-// it uses a multi layer decision system 1 it filters out unsafe moves like collisions and dangerous head to head scenario 2 it sees each remaining move using three strategies the flood fill to measure available space the a Voronoi algorithm to estimate territory control against other snake and distance to a target, which is either food or weaker enemies 
+// it uses a multi layer decision system 1 it filters out unsafe moves like collisions and dangerous
+//  head to head scenario 2 it sees each remaining move using three strategies the flood fill to measure available space
+//  the a Voronoi algorithm to estimate territory control against other snake and distance to a target,
+//  which is either food or weaker enemies 
 
 //source https://youtu.be/Bxdt6T_1qgc?si=IiSDRa5G9pYBIl7d
 // and https://docs.battlesnake.com/guides/useful-algorithms
