@@ -528,53 +528,6 @@ export default function move(gameState) {
     return { move: bestMove };
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
   //the fomer todoes
     // We've included code to prevent your Battlesnake from moving backwards
     // TODO: Step 1 - Prevent your Battlesnake from moving out of bounds
@@ -598,4 +551,5 @@ export default function move(gameState) {
 
 //source https://youtu.be/Bxdt6T_1qgc?si=IiSDRa5G9pYBIl7d
 // and https://docs.battlesnake.com/guides/useful-algorithms
+
 
