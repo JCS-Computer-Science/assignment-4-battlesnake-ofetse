@@ -222,65 +222,6 @@ function enemyDangerZones(state) {
     return danger;
 }
 
-function cornerTrapScore(enemyHead, state) {
-    const { width, height } = state.board;
-    const blocked = buildBlocked(state);
-    let walls = 0;
-    for (const n of neighbors(enemyHead)) {
-        if (n.x < 0 || n.x >= width || n.y < 0 || n.y >= height) walls++;
-        else if (blocked.has(`${n.x},${n.y}`)) walls++;
-    }
-    return walls;
-}
-
-function cutoffScore(myPos, state) {
-    const { width, height } = state.board;
-    const myLen = state.you.body.length;
-    let score = 0;
-
-    for (const snake of state.board.snakes) {
-        if (snake.id === state.you.id) continue;
-        const eHead = snake.body[0];
-
-        const spaceWithoutUs = floodFill(eHead, state);
-        const blockedWithUs  = new Set([`${myPos.x},${myPos.y}`]);
-        const spaceWithUs    = floodFill(eHead, state, blockedWithUs);
-        const spaceReduced   = spaceWithoutUs - spaceWithUs;
-
-        if (snake.body.length < myLen) {
-            score += spaceReduced * 4;
-            const center = { x: Math.floor(width / 2), y: Math.floor(height / 2) };
-            if (manhattan(myPos, center) < manhattan(eHead, center)) score += 15;
-        } else {
-            score += spaceReduced * 1.5;
-        }
-
-        score += cornerTrapScore(eHead, state) * 8;
-    }
-    return score;
-}
-
-function aggressionProfile(state) {
-    const myLen = state.you.body.length;
-    const enemies = state.board.snakes.filter(s => s.id !== state.you.id);
-    const weakerEnemies = enemies.filter(s => s.body.length < myLen);
-    const largerEnemies = enemies.filter(s => s.body.length >= myLen);
-
-    return {
-        apex:   largerEnemies.length === 0 && weakerEnemies.length > 0,
-        hunted: largerEnemies.length > 0,
-        sizeRatio: enemies.length > 0
-            ? myLen / (enemies.reduce((s, e) => s + e.body.length, 0) / enemies.length)
-            : 2,
-        weakerEnemies,
-        largerEnemies,
-    };
-}
-
-function isForcedFeedTurn(state) {
-    return state.turn > 0 && state.turn % 50 === 0;
-}
-
 function predictEnemyMove(snake, state) {
     const moves = legalMoves(snake, state);
     if (moves.length === 0) return "down";
@@ -330,66 +271,29 @@ function evaluate(state) {
     const myLen = state.you.body.length;
     const myHealth = state.you.health;
     const { width, height } = state.board;
-    const profile = aggressionProfile(state);
 
     const space = floodFill(head, state);
     if (space < myLen * 0.5) return -50000 + space;
 
-    const territory  = voronoiScore(head, state);
-    const escapes    = escapeRoutes(head, state);
-    const tunnel     = isTunnel(head, state) ? -60 : 0;
-    const healthScore = myHealth < 50 ? (myHealth - 50) * 2 : 0;
-    const lengthBonus = myLen * 3;
+    const territory = voronoiScore(head, state);
+    const escapes   = escapeRoutes(head, state);
+    const tunnel    = isTunnel(head, state) ? -40 : 0;
+    const healthScore = myHealth < 50 ? (myHealth - 50) * 1.5 : 0;
+    const lengthBonus = myLen * 2;
     const edgePenalty = (head.x === 0 || head.x === width - 1 ||
-                         head.y === 0 || head.y === height - 1) ? -8 : 0;
+                         head.y === 0 || head.y === height - 1) ? -5 : 0;
 
     let killBonus = 0;
     for (const snake of state.board.snakes) {
-        if (snake.id === state.you.id) continue;
+        if (state.you && snake.id === state.you.id) continue;
         if (snake.body.length < myLen) {
             const dist = manhattan(head, snake.body[0]);
-            killBonus += Math.max(0, 12 - dist) * 5;
-            if (dist === 1) killBonus += 200;
+            killBonus += Math.max(0, 10 - dist) * 3;
         }
     }
 
-    const cutoff = cutoffScore(head, state);
-
-    let constrictionBonus = 0;
-    for (const snake of state.board.snakes) {
-        if (snake.id === state.you.id) continue;
-        const eSpace = floodFill(snake.body[0], state);
-        const eTrap  = cornerTrapScore(snake.body[0], state);
-
-        if (snake.body.length < myLen) {
-            constrictionBonus += (4 - eSpace / myLen) * 20;
-            constrictionBonus += eTrap * 15;
-            if (eSpace < snake.body.length) constrictionBonus += 300;
-        } else {
-            constrictionBonus += eTrap * 5;
-        }
-    }
-
-    let aggressionMultiplier = 1.0;
-    if (profile.apex)   aggressionMultiplier = 2.0;
-    if (profile.hunted) aggressionMultiplier = 0.6;
-
-    let hungerUrgency = 0;
-    if (myHealth < 30) hungerUrgency = 80;
-    else if (myHealth < 50) hungerUrgency = 40;
-    else if (myHealth < 70) hungerUrgency = 10;
-
-    return (space * 2.5)
-        + (territory * 4)
-        + (escapes * 6)
-        + tunnel
-        + healthScore
-        + (killBonus * aggressionMultiplier)
-        + (cutoff * aggressionMultiplier)
-        + (constrictionBonus * aggressionMultiplier)
-        + edgePenalty
-        + lengthBonus
-        + hungerUrgency;
+    return (space * 2) + (territory * 3) + (escapes * 5) +
+           tunnel + healthScore + killBonus + edgePenalty + lengthBonus;
 }
 
 function minimax(state, depth, alpha, beta, isMyTurn, startTime, timeLimit) {
@@ -420,22 +324,13 @@ function minimaxRoot(state, validMoves, timeLimit) {
     const startTime = Date.now();
     let bestMove = validMoves[0];
 
-    const enemyCount = state.board.snakes.length - 1;
-    const maxDepth = enemyCount <= 1 ? 8 : enemyCount <= 2 ? 7 : 6;
-
-    for (let depth = 1; depth <= maxDepth; depth++) {
+    for (let depth = 1; depth <= 6; depth++) {
         if (Date.now() - startTime > timeLimit * 0.85) break;
 
         let depthBest = -Infinity;
         let depthBestMove = validMoves[0];
 
-        const scoredMoves = validMoves.map(dir => {
-            const pos = applyDirection(state.you.body[0], dir);
-            const quick = cutoffScore(pos, state) + floodFill(pos, state);
-            return { dir, quick };
-        }).sort((a, b) => b.quick - a.quick);
-
-        for (const { dir } of scoredMoves) {
+        for (const dir of validMoves) {
             const enemyMoves = buildEnemyMoveMap(state);
             const nextState = simulateFullTurn(state, dir, enemyMoves);
             const score = minimax(
@@ -453,12 +348,14 @@ function minimaxRoot(state, validMoves, timeLimit) {
         if (Date.now() - startTime < timeLimit * 0.9) {
             bestMove = depthBestMove;
         }
+
+        console.log(`  Depth ${depth}: best=${depthBestMove} score=${depthBest} elapsed=${Date.now()-startTime}ms`);
     }
 
     return bestMove;
 }
 
-function chooseFoodTarget(state, forceEat = false) {
+function chooseFoodTarget(state) {
     const head = state.you.body[0];
     const myHealth = state.you.health;
     const myLen = state.you.body.length;
@@ -484,7 +381,6 @@ function chooseFoodTarget(state, forceEat = false) {
         if (foodIsTrapped) foodScore -= 40;
         if (myHealth < 30) foodScore += 30;
         if (myHealth < 50) foodScore += 15;
-        if (forceEat)      foodScore += 200;
 
         if (foodScore > bestScore) {
             bestScore = foodScore;
@@ -492,12 +388,48 @@ function chooseFoodTarget(state, forceEat = false) {
         }
     }
 
-    if (!forceEat && myHealth >= 70 && bestFood) {
+    if (myHealth >= 70 && bestFood) {
         const spaceNearFood = floodFill(bestFood, state);
         if (spaceNearFood < myLen * 1.2) return null;
     }
 
     return bestFood;
+}
+
+function trapScore(pos, state) {
+    const myLen = state.you.body.length;
+    let score = 0;
+    for (const snake of state.board.snakes) {
+        if (snake.id === state.you.id) continue;
+        if (snake.body.length >= myLen) continue;
+        const eHead = snake.body[0];
+        const eDist = manhattan(pos, eHead);
+        const enemySpace = floodFill(eHead, state, new Set([`${pos.x},${pos.y}`]));
+        if (enemySpace < myLen * 2) score += (myLen * 2 - enemySpace) * 2;
+        if (eDist <= 3) score += (4 - eDist) * 3;
+    }
+    return score;
+}
+
+function forceCollisionScore(pos, state) {
+    const myLen = state.you.body.length;
+    const { width, height } = state.board;
+    let score = 0;
+    for (const snake of state.board.snakes) {
+        if (snake.id === state.you.id) continue;
+        if (snake.body.length >= myLen) continue;
+        const eHead = snake.body[0];
+        const allBlocked = buildBlocked(state);
+        allBlocked.add(`${pos.x},${pos.y}`);
+        const enemyEscapes = neighbors(eHead).filter(n => {
+            if (n.x < 0 || n.x >= width || n.y < 0 || n.y >= height) return false;
+            return !allBlocked.has(`${n.x},${n.y}`);
+        }).length;
+        if (enemyEscapes === 0) score += 50;
+        else if (enemyEscapes === 1) score += 20;
+        else if (enemyEscapes === 2) score += 8;
+    }
+    return score;
 }
 
 export default function move(gameState) {
@@ -509,8 +441,6 @@ export default function move(gameState) {
     const myLen = gameState.you.body.length;
     const myHealth = gameState.you.health;
     const { width, height } = gameState.board;
-    const profile = aggressionProfile(gameState);
-    const forceEat = isForcedFeedTurn(gameState);
 
     const possibleMoves = {
         up:    { x: head.x,     y: head.y + 1 },
@@ -538,22 +468,20 @@ export default function move(gameState) {
     }
 
     const danger = enemyDangerZones(gameState);
-    if (!profile.apex) {
-        for (const [dir, pos] of Object.entries(possibleMoves)) {
-            if (!safety[dir]) continue;
-            if (danger.has(`${pos.x},${pos.y}`)) safety[dir] = false;
-        }
-    }
-
-    const spaceThreshold = forceEat ? myLen * 0.4 : myLen;
     for (const [dir, pos] of Object.entries(possibleMoves)) {
         if (!safety[dir]) continue;
-        if (floodFill(pos, gameState) < spaceThreshold) safety[dir] = false;
+        if (danger.has(`${pos.x},${pos.y}`)) safety[dir] = false;
+    }
+
+    for (const [dir, pos] of Object.entries(possibleMoves)) {
+        if (!safety[dir]) continue;
+        if (floodFill(pos, gameState) < myLen) safety[dir] = false;
     }
 
     let validMoves = Object.keys(safety).filter(d => safety[d]);
 
     if (validMoves.length === 0) {
+        console.log(`MOVE ${gameState.turn}: Relaxing safety constraints`);
         const loose = { up: true, down: true, left: true, right: true };
 
         if (neck.x < head.x) loose.left  = false;
@@ -573,26 +501,30 @@ export default function move(gameState) {
         validMoves = Object.keys(loose).filter(d => loose[d]);
     }
 
-    if (validMoves.length === 0) return { move: "down" };
-    if (validMoves.length === 1) return { move: validMoves[0] };
+    if (validMoves.length === 0) {
+        console.log(`MOVE ${gameState.turn}: Completely trapped — moving down`);
+        return { move: "down" };
+    }
 
-    if (forceEat && gameState.board.food.length > 0) {
-        const foodTarget = chooseFoodTarget(gameState, true);
-        if (foodTarget) {
-            const minimaxMove = minimaxRoot(gameState, validMoves, TIME_LIMIT);
-            const foodSorted  = validMoves
-                .map(dir => ({ dir, dist: manhattan(applyDirection(head, dir), foodTarget) }))
-                .sort((a, b) => a.dist - b.dist);
-
-            const minimaxDist  = manhattan(applyDirection(head, minimaxMove), foodTarget);
-            const foodMoveDist = foodSorted[0].dist;
-            const finalMove    = minimaxDist <= foodMoveDist + 1 ? minimaxMove : foodSorted[0].dir;
-
-            return { move: finalMove };
-        }
+    if (validMoves.length === 1) {
+        console.log(`MOVE ${gameState.turn}: Only option — ${validMoves[0]}`);
+        return { move: validMoves[0] };
     }
 
     const bestMove = minimaxRoot(gameState, validMoves, TIME_LIMIT);
+
+    const needsFood = myHealth <= 50;
+    const foodTarget = chooseFoodTarget(gameState);
+    const targetType = foodTarget ? "food" :
+        (gameState.board.snakes.some(s => s.id !== gameState.you.id && s.body.length < myLen)
+            ? "hunt" : "none");
+
+    const elapsed = Date.now() - START_TIME;
+    console.log(
+        `MOVE ${gameState.turn}: ${bestMove} | health=${myHealth} | target=${targetType} | ` +
+        `valid=[${validMoves.join(",")}] | time=${elapsed}ms`
+    );
+
     return { move: bestMove };
 }
 
