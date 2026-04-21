@@ -41,14 +41,14 @@ function buildBlocked(state) {
     const blocked = new Set();
     for (const snake of state.board.snakes) {
         const body = snake.body;
-        for (let i = 0; i < body.length; i++) {
-            if (i === body.length - 1) {
-                const justAte = body.length >= 2 &&
-                    body[body.length - 1].x === body[body.length - 2].x &&
-                    body[body.length - 1].y === body[body.length - 2].y;
-                if (!justAte) continue;
-            }
+        const justAte = body.length >= 2 &&
+            body[body.length - 1].x === body[body.length - 2].x &&
+            body[body.length - 1].y === body[body.length - 2].y;
+        for (let i = 0; i < body.length - 1; i++) {
             blocked.add(`${body[i].x},${body[i].y}`);
+        }
+        if (justAte) {
+            blocked.add(`${body[body.length - 1].x},${body[body.length - 1].y}`);
         }
     }
     return blocked;
@@ -78,7 +78,9 @@ function legalMoves(snake, state) {
 
 function simulateFullTurn(state, myMove, enemyMoves) {
     const next = cloneState(state);
-    const moveMap = { [state.you.id]: myMove, ...enemyMoves };
+    const moveMap = {};
+    if (myMove && next.you) moveMap[next.you.id] = myMove;
+    for (const [id, dir] of Object.entries(enemyMoves)) moveMap[id] = dir;
 
     for (const snake of next.board.snakes) {
         const dir = moveMap[snake.id];
@@ -280,8 +282,13 @@ function evaluate(state) {
     const tunnel    = isTunnel(head, state) ? -40 : 0;
     const healthScore = myHealth < 50 ? (myHealth - 50) * 1.5 : 0;
     const lengthBonus = myLen * 2;
+
+    const centerX = (width - 1) / 2;
+    const centerY = (height - 1) / 2;
+    const centerGravity = (centerX - Math.abs(head.x - centerX)) +
+                          (centerY - Math.abs(head.y - centerY));
     const edgePenalty = (head.x === 0 || head.x === width - 1 ||
-                         head.y === 0 || head.y === height - 1) ? -5 : 0;
+                         head.y === 0 || head.y === height - 1) ? -25 : 0;
 
     let killBonus = 0;
     for (const snake of state.board.snakes) {
@@ -292,8 +299,16 @@ function evaluate(state) {
         }
     }
 
+    const foodTarget = chooseFoodTarget(state);
+    let foodScore = 0;
+    if (foodTarget && myHealth < 50) {
+        const dist = manhattan(head, foodTarget);
+        foodScore = Math.max(0, (50 - myHealth)) * (1 / (dist + 1)) * 10;
+    }
+
     return (space * 2) + (territory * 3) + (escapes * 5) +
-           tunnel + healthScore + killBonus + edgePenalty + lengthBonus;
+           tunnel + healthScore + killBonus + edgePenalty + lengthBonus +
+           centerGravity * 0.5 + foodScore;
 }
 
 function minimax(state, depth, alpha, beta, isMyTurn, startTime, timeLimit) {
@@ -316,7 +331,28 @@ function minimax(state, depth, alpha, beta, isMyTurn, startTime, timeLimit) {
         }
         return best;
     } else {
-        return minimax(state, depth - 1, alpha, beta, true, startTime, timeLimit);
+        const enemies = state.board.snakes.filter(s => s.id !== state.you.id);
+        if (enemies.length === 0) {
+            return minimax(state, depth - 1, alpha, beta, true, startTime, timeLimit);
+        }
+
+        const primaryEnemy = enemies.reduce((worst, s) => {
+            return s.body.length >= worst.body.length ? s : worst;
+        }, enemies[0]);
+
+        const enemyMoveOptions = legalMoves(primaryEnemy, state);
+        let worst = Infinity;
+
+        for (const enemyDir of enemyMoveOptions) {
+            const enemyMoves = buildEnemyMoveMap(state);
+            enemyMoves[primaryEnemy.id] = enemyDir;
+            const nextState = simulateFullTurn(state, null, enemyMoves);
+            const score = minimax(nextState, depth - 1, alpha, beta, true, startTime, timeLimit);
+            worst = Math.min(worst, score);
+            beta = Math.min(beta, worst);
+            if (beta <= alpha) break;
+        }
+        return worst;
     }
 }
 
@@ -513,7 +549,6 @@ export default function move(gameState) {
 
     const bestMove = minimaxRoot(gameState, validMoves, TIME_LIMIT);
 
-    const needsFood = myHealth <= 50;
     const foodTarget = chooseFoodTarget(gameState);
     const targetType = foodTarget ? "food" :
         (gameState.board.snakes.some(s => s.id !== gameState.you.id && s.body.length < myLen)
