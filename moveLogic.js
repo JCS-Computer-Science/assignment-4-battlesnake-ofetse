@@ -1,10 +1,13 @@
-export default function move(gameState) {
+const DEBUG = false;
+const log = (...args) => DEBUG && console.log(...args);
 
+export default function move(gameState) {
   const W = gameState.board.width;
   const H = gameState.board.height;
   const myHead = gameState.you.body[0];
   const myLength = gameState.you.body.length;
   const myHealth = gameState.you.health;
+  const turn = gameState.turn;
 
   const key = (x, y) => `${x},${y}`;
 
@@ -17,29 +20,109 @@ export default function move(gameState) {
 
   const inBounds = (x, y) => x >= 0 && x < W && y >= 0 && y < H;
 
-  const buildOccupied = (excludeTails = true) => {
-    const occupied = new Set();
+  const hazardCells = new Set(
+    (gameState.board.hazards ?? []).map(h => key(h.x, h.y))
+  );
+  const hazardDamage = gameState.game?.ruleset?.settings?.hazardDamagePerTurn ?? 14;
+  const isInHazard = (x, y) => hazardCells.has(key(x, y));
+
+  const shrinkInterval = gameState.game?.ruleset?.settings?.shrinkEveryNTurns ?? 25;
+  const HAZARD_LOOKAHEAD = 3;
+
+  const turnsUntilHazard = new Map();
+  for (const k of hazardCells) turnsUntilHazard.set(k, 0);
+
+  if (hazardCells.size > 0 && shrinkInterval > 0) {
+    let frontier = new Set(hazardCells);
+    for (let ring = 1; ring <= HAZARD_LOOKAHEAD; ring++) {
+      const nextFrontier = new Set();
+      for (const k of frontier) {
+        const [cx, cy] = k.split(',').map(Number);
+        for (const [dx, dy] of [[0,1],[0,-1],[-1,0],[1,0]]) {
+          const nx = cx + dx, ny = cy + dy;
+          if (!inBounds(nx, ny)) continue;
+          const nk = key(nx, ny);
+          if (turnsUntilHazard.has(nk)) continue;
+          turnsUntilHazard.set(nk, ring * shrinkInterval);
+          nextFrontier.add(nk);
+        }
+      }
+      frontier = nextFrontier;
+      if (frontier.size === 0) break;
+    }
+  }
+
+  const turnsToHazard = (x, y) => turnsUntilHazard.get(key(x, y)) ?? Infinity;
+
+  function buildDecayMap() {
+    const decay = new Map();
     for (const snake of gameState.board.snakes) {
-      const justAte = snake.body[snake.body.length - 1].x === snake.body[snake.body.length - 2]?.x
-                   && snake.body[snake.body.length - 1].y === snake.body[snake.body.length - 2]?.y;
+      const justAte =
+        snake.body.length > 1 &&
+        snake.body[snake.body.length - 1].x === snake.body[snake.body.length - 2].x &&
+        snake.body[snake.body.length - 1].y === snake.body[snake.body.length - 2].y;
+
       snake.body.forEach((seg, i) => {
-        const isTail = i === snake.body.length - 1;
-        if (excludeTails && isTail && !justAte) return; // tail will move
-        occupied.add(key(seg.x, seg.y));
+        const k = key(seg.x, seg.y);
+        const stepsUntilClear = justAte
+          ? snake.body.length - i
+          : snake.body.length - i - 1;
+        const clearsAt = turn + stepsUntilClear;
+        if (!decay.has(k) || decay.get(k) < clearsAt) {
+          decay.set(k, clearsAt);
+        }
       });
     }
-    return occupied;
+    return decay;
+  }
+
+  function buildDecayAwareBlocked(decayMap, stepsAway) {
+    const blocked = new Set();
+    for (const [k, clearsAt] of decayMap) {
+      if (clearsAt > turn + stepsAway) blocked.add(k);
+    }
+    return blocked;
+  }
+
+  const buildOccupied = (excludeTails = true) => {
+    const occ = new Set();
+    for (const snake of gameState.board.snakes) {
+      const justAte =
+        snake.body.length > 1 &&
+        snake.body[snake.body.length - 1].x === snake.body[snake.body.length - 2].x &&
+        snake.body[snake.body.length - 1].y === snake.body[snake.body.length - 2].y;
+      snake.body.forEach((seg, i) => {
+        const isTail = i === snake.body.length - 1;
+        if (excludeTails && isTail && !justAte) return;
+        occ.add(key(seg.x, seg.y));
+      });
+    }
+    return occ;
   };
 
+  const occupied     = buildOccupied(true);
+  const occupiedFull = buildOccupied(false);
+  const decayMap     = buildDecayMap();
+
+  const enemyHunger = new Map();
+  for (const snake of gameState.board.snakes) {
+    if (snake.id === gameState.you.id) continue;
+    const h = snake.latestEatingTurn !== undefined
+      ? snake.health
+      : snake.health;
+    enemyHunger.set(snake.id, {
+      health:   h,
+      hungry:   h < 70,
+      starving: h < 25,
+    });
+  }
 
   const moveSafety = { up: true, down: true, left: true, right: true };
-
 
   if (myHead.x === 0)     moveSafety.left  = false;
   if (myHead.x === W - 1) moveSafety.right = false;
   if (myHead.y === 0)     moveSafety.down  = false;
   if (myHead.y === H - 1) moveSafety.up    = false;
-
 
   const myNeck = gameState.you.body[1];
   if (myNeck.x < myHead.x) moveSafety.left  = false;
@@ -47,38 +130,33 @@ export default function move(gameState) {
   if (myNeck.y < myHead.y) moveSafety.down  = false;
   if (myNeck.y > myHead.y) moveSafety.up    = false;
 
-  const occupied = buildOccupied(true);
   for (const [dir, pos] of Object.entries(DIRS)) {
     if (!moveSafety[dir]) continue;
     if (occupied.has(key(pos.x, pos.y))) moveSafety[dir] = false;
   }
 
-  
+  const h2hRisk = new Set();
   for (const snake of gameState.board.snakes) {
     if (snake.id === gameState.you.id) continue;
-    if (snake.body.length < myLength) continue; 
+    const hunger = enemyHunger.get(snake.id);
+    const tooSmall = snake.body.length < myLength;
+    const starvingWild = tooSmall && hunger?.starving;
+    if (tooSmall && !starvingWild) continue;
     const eHead = snake.body[0];
-    const enemyNextMoves = new Set([
-      key(eHead.x,     eHead.y + 1),
-      key(eHead.x,     eHead.y - 1),
-      key(eHead.x - 1, eHead.y    ),
-      key(eHead.x + 1, eHead.y    ),
-    ]);
-    for (const [dir, pos] of Object.entries(DIRS)) {
-      if (!moveSafety[dir]) continue;
-      if (enemyNextMoves.has(key(pos.x, pos.y))) moveSafety[dir] = false;
+    for (const [dx, dy] of [[0,1],[0,-1],[-1,0],[1,0]]) {
+      h2hRisk.add(key(eHead.x + dx, eHead.y + dy));
     }
   }
 
   const safeMoves = Object.keys(moveSafety).filter(d => moveSafety[d]);
 
   if (safeMoves.length === 0) {
-    console.log(`MOVE ${gameState.turn}: No safe moves — defaulting down`);
+    log(`MOVE ${turn}: No safe moves — defaulting down`);
     return { move: "down" };
   }
-  const occupiedStrict = buildOccupied(false);
 
   function floodFill(startX, startY, blocked) {
+    if (!inBounds(startX, startY)) return 0;
     const visited = new Set();
     const queue = [{ x: startX, y: startY }];
     visited.add(key(startX, startY));
@@ -89,9 +167,7 @@ export default function move(gameState) {
       for (const [dx, dy] of [[0,1],[0,-1],[-1,0],[1,0]]) {
         const nx = x + dx, ny = y + dy;
         const k = key(nx, ny);
-        if (!inBounds(nx, ny)) continue;
-        if (visited.has(k)) continue;
-        if (blocked.has(k)) continue;
+        if (!inBounds(nx, ny) || visited.has(k) || blocked.has(k)) continue;
         visited.add(k);
         queue.push({ x: nx, y: ny });
       }
@@ -99,12 +175,174 @@ export default function move(gameState) {
     return count;
   }
 
-  function voronoiScore() {
+  function floodFillDecay(startX, startY, lookahead) {
+    const blocked = buildDecayAwareBlocked(decayMap, lookahead);
+    blocked.delete(key(startX, startY));
+    return floodFill(startX, startY, blocked);
+  }
+
+  function floodFillHazardWeighted(startX, startY, lookahead) {
+    if (!inBounds(startX, startY)) return 0;
+    const blocked = buildDecayAwareBlocked(decayMap, lookahead);
+    blocked.delete(key(startX, startY));
+
+    const visited = new Set();
+    const queue = [{ x: startX, y: startY, dist: 0 }];
+    visited.add(key(startX, startY));
+    let score = 0;
+
+    while (queue.length > 0) {
+      const { x, y, dist } = queue.shift();
+
+      const tth = turnsToHazard(x, y);
+      let weight;
+      if (tth === 0) {
+        weight = 0.15;
+      } else if (tth !== Infinity && dist >= tth) {
+        weight = 0.15;
+      } else if (tth !== Infinity && dist >= tth - shrinkInterval) {
+        weight = 0.5;
+      } else {
+        weight = 1.0;
+      }
+      score += weight;
+
+      for (const [dx, dy] of [[0,1],[0,-1],[-1,0],[1,0]]) {
+        const nx = x + dx, ny = y + dy;
+        const nk = key(nx, ny);
+        if (!inBounds(nx, ny) || visited.has(nk) || blocked.has(nk)) continue;
+        visited.add(nk);
+        queue.push({ x: nx, y: ny, dist: dist + 1 });
+      }
+    }
+    return score;
+  }
+
+  function aStarDist(sx, sy, tx, ty, blocked) {
+    const heuristic = (x, y) => Math.abs(x - tx) + Math.abs(y - ty);
+    const open = [{ x: sx, y: sy, g: 0, f: heuristic(sx, sy) }];
+    const gScore = new Map();
+    gScore.set(key(sx, sy), 0);
+
+    while (open.length > 0) {
+      open.sort((a, b) => a.f - b.f);
+      const { x, y, g } = open.shift();
+      if (x === tx && y === ty) return g;
+      for (const [dx, dy] of [[0,1],[0,-1],[-1,0],[1,0]]) {
+        const nx = x + dx, ny = y + dy;
+        if (!inBounds(nx, ny)) continue;
+        const nk = key(nx, ny);
+        if (blocked.has(nk) && !(nx === tx && ny === ty)) continue;
+        const ng = g + 1;
+        if (ng < (gScore.get(nk) ?? Infinity)) {
+          gScore.set(nk, ng);
+          open.push({ x: nx, y: ny, g: ng, f: ng + heuristic(nx, ny) });
+        }
+      }
+    }
+    return Infinity;
+  }
+
+  const enemies = gameState.board.snakes.filter(s => s.id !== gameState.you.id);
+  const is1v1   = enemies.length === 1;
+
+  function minimaxEval(mHead, mBody, eHead, eBody, mHealth, eHealth, depth, alpha, beta, maximising) {
+    const mAlive = inBounds(mHead.x, mHead.y);
+    const eAlive = inBounds(eHead.x, eHead.y);
+    if (!mAlive && !eAlive) return 0;
+    if (!mAlive) return -1;
+    if (!eAlive) return  1;
+    if (depth === 0) {
+      const bodies = new Set([...mBody.map(s => key(s.x, s.y)), ...eBody.map(s => key(s.x, s.y))]);
+      bodies.delete(key(mHead.x, mHead.y));
+      bodies.delete(key(eHead.x, eHead.y));
+      const mFill = floodFill(mHead.x, mHead.y, bodies);
+      const eFill = floodFill(eHead.x, eHead.y, bodies);
+      const tot   = mFill + eFill;
+      return tot > 0 ? (mFill - eFill) / tot : 0;
+    }
+
+    const moveDelta = [[0,1],[0,-1],[-1,0],[1,0]];
+
+    if (maximising) {
+      let best = -Infinity;
+      for (const [dx, dy] of moveDelta) {
+        const nx = mHead.x + dx, ny = mHead.y + dy;
+        if (!inBounds(nx, ny)) continue;
+        const nk = key(nx, ny);
+        const mTailKey = key(mBody[mBody.length - 1].x, mBody[mBody.length - 1].y);
+        const mBodySet = new Set(mBody.map(s => key(s.x, s.y)));
+        mBodySet.delete(mTailKey);
+        if (mBodySet.has(nk)) continue;
+        const eTailKey = key(eBody[eBody.length - 1].x, eBody[eBody.length - 1].y);
+        const eBodySet = new Set(eBody.map(s => key(s.x, s.y)));
+        eBodySet.delete(eTailKey);
+        if (eBodySet.has(nk)) continue;
+
+        const newMHead = { x: nx, y: ny };
+        const newMBody = [newMHead, ...mBody.slice(0, -1)];
+        const val = minimaxEval(newMHead, newMBody, eHead, eBody, mHealth - 1, eHealth, depth - 1, alpha, beta, false);
+        best  = Math.max(best, val);
+        alpha = Math.max(alpha, val);
+        if (beta <= alpha) break;
+      }
+      return best === -Infinity ? -1 : best;
+    } else {
+      let best = Infinity;
+      for (const [dx, dy] of moveDelta) {
+        const nx = eHead.x + dx, ny = eHead.y + dy;
+        if (!inBounds(nx, ny)) continue;
+        const nk = key(nx, ny);
+        const eTailKey = key(eBody[eBody.length - 1].x, eBody[eBody.length - 1].y);
+        const eBodySet = new Set(eBody.map(s => key(s.x, s.y)));
+        eBodySet.delete(eTailKey);
+        if (eBodySet.has(nk)) continue;
+        const mTailKey = key(mBody[mBody.length - 1].x, mBody[mBody.length - 1].y);
+        const mBodySet = new Set(mBody.map(s => key(s.x, s.y)));
+        mBodySet.delete(mTailKey);
+        if (mBodySet.has(nk)) continue;
+
+        const newEHead = { x: nx, y: ny };
+        const newEBody = [newEHead, ...eBody.slice(0, -1)];
+        const val = minimaxEval(mHead, mBody, newEHead, newEBody, mHealth, eHealth - 1, depth - 1, alpha, beta, true);
+        best = Math.min(best, val);
+        beta = Math.min(beta, val);
+        if (beta <= alpha) break;
+      }
+      return best === Infinity ? 1 : best;
+    }
+  }
+
+  const MINIMAX_DEPTH = 4;
+  const minimaxScores = {};
+  if (is1v1) {
+    const enemy = enemies[0];
+    const eHunger = enemyHunger.get(enemy.id);
+    log(`1v1 mode: minimax depth ${MINIMAX_DEPTH}, enemy health=${eHunger?.health}`);
+    for (const dir of safeMoves) {
+      const pos = DIRS[dir];
+      const newMyHead = { x: pos.x, y: pos.y };
+      const newMyBody = [newMyHead, ...gameState.you.body.slice(0, -1)];
+      minimaxScores[dir] = minimaxEval(
+        newMyHead, newMyBody,
+        enemy.body[0], enemy.body,
+        myHealth - 1, enemy.health,
+        MINIMAX_DEPTH - 1, -Infinity, Infinity, false
+      );
+    }
+    log(`  minimax scores: ${JSON.stringify(minimaxScores)}`);
+  }
+
+  function voronoiScoreFrom(fromX, fromY) {
     const dist = new Map();
     const queue = [];
-
-  
+    {
+      const k = key(fromX, fromY);
+      dist.set(k, { owner: gameState.you.id, d: 0 });
+      queue.push({ x: fromX, y: fromY, owner: gameState.you.id, d: 0 });
+    }
     for (const snake of gameState.board.snakes) {
+      if (snake.id === gameState.you.id) continue;
       const h = snake.body[0];
       const k = key(h.x, h.y);
       if (!dist.has(k)) {
@@ -112,14 +350,13 @@ export default function move(gameState) {
         queue.push({ x: h.x, y: h.y, owner: snake.id, d: 0 });
       }
     }
-
     let qi = 0;
     while (qi < queue.length) {
       const { x, y, owner, d } = queue[qi++];
       for (const [dx, dy] of [[0,1],[0,-1],[-1,0],[1,0]]) {
         const nx = x + dx, ny = y + dy;
         if (!inBounds(nx, ny)) continue;
-        if (occupiedStrict.has(key(nx, ny))) continue;
+        if (occupiedFull.has(key(nx, ny))) continue;
         const k = key(nx, ny);
         if (!dist.has(k)) {
           dist.set(k, { owner, d: d + 1 });
@@ -127,7 +364,6 @@ export default function move(gameState) {
         }
       }
     }
-
     let mine = 0, total = 0;
     for (const { owner } of dist.values()) {
       total++;
@@ -136,97 +372,138 @@ export default function move(gameState) {
     return total > 0 ? mine / total : 0;
   }
 
-  
+  function scoreFoodItems(reachableFood) {
+    if (reachableFood.length === 0) return null;
+
+    return reachableFood.reduce((best, f) => {
+      const myDist = aStarDist(myHead.x, myHead.y, f.x, f.y, occupiedFull);
+      if (myDist === Infinity) return best;
+
+      let minEnemyEffectiveDist = Infinity;
+      for (const snake of gameState.board.snakes) {
+        if (snake.id === gameState.you.id) continue;
+        const eHead = snake.body[0];
+        const rawDist = Math.abs(eHead.x - f.x) + Math.abs(eHead.y - f.y);
+        const hunger  = enemyHunger.get(snake.id);
+        const hungerBias = hunger?.starving ? 4 : hunger?.hungry ? 2 : 0;
+        const effectiveDist = Math.max(0, rawDist - hungerBias);
+        if (effectiveDist < minEnemyEffectiveDist) minEnemyEffectiveDist = effectiveDist;
+      }
+
+      const maxDist  = W + H;
+      const advantage = (minEnemyEffectiveDist - myDist) / maxDist;
+      const proximity = 1 - myDist / maxDist;
+      const score    = 0.5 * proximity + 0.5 * advantage;
+
+      return score > best.score ? { pos: f, score } : best;
+    }, { pos: null, score: -Infinity }).pos;
+  }
+
+  function foodIsReachable(food) {
+    const fillFromFood = floodFill(food.x, food.y, occupiedFull);
+    return fillFromFood >= myLength;
+  }
+
   function findTarget() {
     const food = gameState.board.food;
-    
-    const hungry = myHealth < 40 || food.length === 0 ? true : myHealth < 70;
+    const reachableFood = food.filter(foodIsReachable);
+    const hungry = myHealth < 40 || reachableFood.length === 0 ? true : myHealth < 70;
 
-    if (hungry && food.length > 0) {
-      
-      return food.reduce((best, f) => {
-        const d = Math.abs(f.x - myHead.x) + Math.abs(f.y - myHead.y);
-        return d < best.d ? { pos: f, d } : best;
-      }, { pos: null, d: Infinity }).pos;
+    if (hungry && reachableFood.length > 0) {
+      const best = scoreFoodItems(reachableFood);
+      if (best) return best;
     }
-
 
     let bestEnemy = null, bestDist = Infinity;
     for (const snake of gameState.board.snakes) {
       if (snake.id === gameState.you.id) continue;
       if (snake.body.length >= myLength) continue;
       const eHead = snake.body[0];
-      const d = Math.abs(eHead.x - myHead.x) + Math.abs(eHead.y - myHead.y);
+      const d = aStarDist(myHead.x, myHead.y, eHead.x, eHead.y, occupiedFull);
       if (d < bestDist) { bestDist = d; bestEnemy = eHead; }
     }
     if (bestEnemy) return bestEnemy;
 
-    if (food.length > 0) {
-      return food.reduce((best, f) => {
-        const d = Math.abs(f.x - myHead.x) + Math.abs(f.y - myHead.y);
-        return d < best.d ? { pos: f, d } : best;
-      }, { pos: null, d: Infinity }).pos;
-    }
-
+    if (reachableFood.length > 0) return scoreFoodItems(reachableFood);
     return null;
   }
 
   const target = findTarget();
   const totalCells = W * H;
 
-  const W_FLOOD   = 0.5;
-  const W_VORONOI = 0.3; 
-  const W_TARGET  = 0.2; 
-  
-  const targetBoost = myHealth < 30 ? 0.4 : 0;
+  const W_FLOOD     = is1v1 ? 0.20 : 0.45;
+  const W_VORONOI   = is1v1 ? 0.25 : 0.35;
+  const W_TARGET    = is1v1 ? 0.15 : 0.20;
+  const W_MINIMAX   = is1v1 ? 0.40 : 0.00;
+  const H2H_PENALTY = 0.25;
+
+  const hazardPenalty = (pos) => {
+    const tth = turnsToHazard(pos.x, pos.y);
+    const turnsOfHazardWeCanSurvive = Math.floor((myHealth - 1) / hazardDamage);
+
+    if (tth === 0) {
+      return turnsOfHazardWeCanSurvive <= 1 ? 0.50
+           : turnsOfHazardWeCanSurvive <= 3 ? 0.25
+           : 0.10;
+    }
+    if (tth <= shrinkInterval) {
+      return turnsOfHazardWeCanSurvive <= 1 ? 0.25
+           : turnsOfHazardWeCanSurvive <= 3 ? 0.12
+           : 0.05;
+    }
+    if (tth <= shrinkInterval * 2) {
+      return 0.05;
+    }
+    return 0;
+  };
+
+  const targetBoost = myHealth < 30 ? 0.35 : 0;
+  const DECAY_LOOKAHEAD = Math.min(10, Math.floor((W + H) / 2));
 
   const scores = {};
 
   for (const dir of safeMoves) {
     const pos = DIRS[dir];
 
-    const fillBlocked = new Set(occupiedStrict);
-    fillBlocked.delete(key(pos.x, pos.y)); // the cell we're moving into is passable
-    const fillCount = floodFill(pos.x, pos.y, fillBlocked);
-    const floodScore = fillCount / totalCells; // 0–1
+    const fillCount  = floodFillHazardWeighted(pos.x, pos.y, DECAY_LOOKAHEAD);
+    const floodScore = fillCount / totalCells;
 
-    const voronoi = voronoiScore(); 
-    let voronoiBias = 0;
-    for (const snake of gameState.board.snakes) {
-      if (snake.id === gameState.you.id) continue;
-      const eHead = snake.body[0];
-      const distNow  = Math.abs(myHead.x - eHead.x) + Math.abs(myHead.y - eHead.y);
-      const distNext = Math.abs(pos.x    - eHead.x) + Math.abs(pos.y    - eHead.y);
-    
-      voronoiBias += (distNext - distNow) / (W + H);
-    }
-    const voronoiScore_ = Math.min(1, Math.max(0, voronoi + voronoiBias));
+    const voronoi = voronoiScoreFrom(pos.x, pos.y);
 
-    
-    let targetScore = 0.5; 
+    let targetScore = 0.5;
     if (target) {
-      const distToTarget = Math.abs(pos.x - target.x) + Math.abs(pos.y - target.y);
-      const maxDist = W + H;
-      targetScore = 1 - distToTarget / maxDist; 
+      const distToTarget = aStarDist(pos.x, pos.y, target.x, target.y, occupiedFull);
+      targetScore = distToTarget === Infinity ? 0
+        : 1 - Math.min(distToTarget, W + H) / (W + H);
     }
 
-    const wT = Math.min(W_TARGET + targetBoost, 0.6);
+    const wT = Math.min(W_TARGET + targetBoost, 0.55);
     const wF = W_FLOOD   * (1 - targetBoost);
     const wV = W_VORONOI * (1 - targetBoost);
+    const wM = W_MINIMAX;
 
-    scores[dir] = wF * floodScore + wV * voronoiScore_ + wT * targetScore;
+    const mmRaw  = minimaxScores[dir] ?? 0;
+    const mmNorm = (mmRaw + 1) / 2;
 
-    console.log(`  [${dir}] flood=${floodScore.toFixed(2)} voronoi=${voronoiScore_.toFixed(2)} target=${targetScore.toFixed(2)} → ${scores[dir].toFixed(3)}`);
+    let score = wF * floodScore + wV * voronoi + wT * targetScore + wM * mmNorm;
+
+    if (h2hRisk.has(key(pos.x, pos.y))) score -= H2H_PENALTY;
+
+    score -= hazardPenalty(pos);
+
+    scores[dir] = score;
+
+    log(`  [${dir}] flood=${floodScore.toFixed(2)} voronoi=${voronoi.toFixed(2)} target=${targetScore.toFixed(2)} minimax=${mmRaw.toFixed(2)} hazard=${isInHazard(pos.x, pos.y)} → ${score.toFixed(3)}`);
   }
 
   const bestMove = safeMoves.reduce((best, dir) =>
-    scores[dir] > scores[best] ? dir : best
-  , safeMoves[0]);
+    scores[dir] > scores[best] ? dir : best,
+    safeMoves[0]
+  );
 
-  console.log(`MOVE ${gameState.turn}: ${bestMove} (health=${myHealth}, safeMoves=[${safeMoves.join(",")}])`);
+  log(`MOVE ${turn}: ${bestMove} (health=${myHealth}, 1v1=${is1v1}, safeMoves=[${safeMoves.join(",")}])`);
   return { move: bestMove };
 }
-
   //the fomer todoes
     // We've included code to prevent your Battlesnake from moving backwards
     // TODO: Step 1 - Prevent your Battlesnake from moving out of bounds
