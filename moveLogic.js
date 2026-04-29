@@ -81,9 +81,7 @@ export default function move(gameState) {
     return blocked;
   }
 
-  // ─── BODY COLLISION AVOIDANCE (IMPROVED) ────────────────────────────────────
-  // Build occupied sets. We never move into any body segment that won't have
-  // cleared by next turn (i.e. clearsAt > turn + 1 means it's still there).
+ 
   const buildOccupied = (excludeTails = true) => {
     const occ = new Set();
     for (const snake of gameState.board.snakes) {
@@ -93,7 +91,7 @@ export default function move(gameState) {
         snake.body[snake.body.length - 1].y === snake.body[snake.body.length - 2].y;
       snake.body.forEach((seg, i) => {
         const isTail = i === snake.body.length - 1;
-        // Tail is safe to enter UNLESS the snake just ate (tail won't shrink)
+       
         if (excludeTails && isTail && !justAte) return;
         occ.add(key(seg.x, seg.y));
       });
@@ -114,7 +112,8 @@ export default function move(gameState) {
     enemyHunger.set(snake.id, { health: h, hungry: h < 70, starving: h < 25 });
   }
 
-  // For each enemy classify threat level relative to us
+  
+
   const enemyThreat = new Map();
   for (const snake of enemies) {
     const lengthDiff = myLength - snake.body.length;
@@ -130,34 +129,28 @@ export default function move(gameState) {
   const weAreBiggest = enemies.every(s => myLength > s.body.length);
   const dominantSize = myLength >= 2 + Math.max(...enemies.map(s => s.body.length), 0);
 
-  // ─── HARD DANGER CELLS ───────────────────────────────────────────────────────
-  // Cells we should NEVER move into regardless of score:
-  //   1. Any enemy body segment (that won't have cleared by next turn)
-  //   2. Enemy head cells (always lethal to collide with)
-  //   3. Cells adjacent to an equal-or-bigger enemy head (head-on collision risk)
-  //      EXCEPTION: we skip this hard block if we're bigger (we want to hunt them)
   const hardDangerCells = new Set();
 
   for (const snake of enemies) {
     const threat = enemyThreat.get(snake.id);
     const eHead  = snake.body[0];
 
-    // Block the enemy head itself — moving onto it is always fatal
+    
     hardDangerCells.add(key(eHead.x, eHead.y));
 
-    // Block all body segments (excluding tail that will clear, same logic as occupied)
+   
+
     const justAte =
       snake.body.length > 1 &&
       snake.body[snake.body.length - 1].x === snake.body[snake.body.length - 2].x &&
       snake.body[snake.body.length - 1].y === snake.body[snake.body.length - 2].y;
     snake.body.forEach((seg, i) => {
       const isTail = i === snake.body.length - 1;
-      if (isTail && !justAte) return; // tail will move away
+      if (isTail && !justAte) return; 
       hardDangerCells.add(key(seg.x, seg.y));
     });
 
-    // Block cells adjacent to equal/bigger heads (head-on collision zone)
-    // Only skip this if we're clearly dominant (we want to hunt smaller snakes)
+  
     if (threat.bigger || threat.equal) {
       for (const [dx, dy] of [[0,1],[0,-1],[-1,0],[1,0]]) {
         hardDangerCells.add(key(eHead.x + dx, eHead.y + dy));
@@ -165,9 +158,9 @@ export default function move(gameState) {
     }
   }
 
-  // ─── SCORE-ONLY SETS (kept for bonus/penalty scoring) ────────────────────────
-  const h2hRisk = new Set(); // cells where enemy can eat us (penalise)
-  const h2hKill = new Set(); // cells where WE can eat enemy (reward)
+  
+  const h2hRisk = new Set(); 
+  const h2hKill = new Set(); 
 
   for (const snake of enemies) {
     const threat = enemyThreat.get(snake.id);
@@ -185,36 +178,33 @@ export default function move(gameState) {
     }
   }
 
-  // ─── SAFE MOVES ──────────────────────────────────────────────────────────────
+  
   const moveSafety = { up: true, down: true, left: true, right: true };
 
-  // Wall bounds
   if (myHead.x === 0)     moveSafety.left  = false;
   if (myHead.x === W - 1) moveSafety.right = false;
   if (myHead.y === 0)     moveSafety.down  = false;
   if (myHead.y === H - 1) moveSafety.up    = false;
 
-  // Never reverse into neck
+  
   const myNeck = gameState.you.body[1];
   if (myNeck.x < myHead.x) moveSafety.left  = false;
   if (myNeck.x > myHead.x) moveSafety.right = false;
   if (myNeck.y < myHead.y) moveSafety.down  = false;
   if (myNeck.y > myHead.y) moveSafety.up    = false;
 
-  // Block any move that lands on an occupied cell (our own body + enemy bodies)
+  
   for (const [dir, pos] of Object.entries(DIRS)) {
     if (!moveSafety[dir]) continue;
     if (occupied.has(key(pos.x, pos.y))) moveSafety[dir] = false;
   }
 
-  // Block any move that lands on a hard danger cell (enemy heads + head-on zones)
-  // But only if it would leave us with at least one other option — otherwise
-  // accept the danger rather than guarantee death by having zero moves.
+  
   const movesBeforeHardBlock = Object.keys(moveSafety).filter(d => moveSafety[d]);
   const hardBlocked = movesBeforeHardBlock.filter(d => hardDangerCells.has(key(DIRS[d].x, DIRS[d].y)));
   const afterHardBlock = movesBeforeHardBlock.filter(d => !hardDangerCells.has(key(DIRS[d].x, DIRS[d].y)));
 
-  // Apply hard block only if it doesn't eliminate ALL options
+  
   if (afterHardBlock.length > 0) {
     for (const dir of hardBlocked) {
       moveSafety[dir] = false;
@@ -230,7 +220,7 @@ export default function move(gameState) {
     return { move: "down" };
   }
 
-  // ─── FLOOD FILL ──────────────────────────────────────────────────────────────
+ 
   function floodFill(startX, startY, blocked) {
     if (!inBounds(startX, startY)) return 0;
     const visited = new Set();
@@ -284,7 +274,7 @@ export default function move(gameState) {
     return score;
   }
 
-  // ─── A* ──────────────────────────────────────────────────────────────────────
+
   function aStarDist(sx, sy, tx, ty, blocked) {
     const heuristic = (x, y) => Math.abs(x - tx) + Math.abs(y - ty);
     const open = [{ x: sx, y: sy, g: 0, f: heuristic(sx, sy) }];
@@ -309,7 +299,7 @@ export default function move(gameState) {
     return Infinity;
   }
 
-  // ─── VORONOI ─────────────────────────────────────────────────────────────────
+ 
   function voronoiDetailed(fromX, fromY) {
     const dist = new Map();
     const queue = [];
@@ -349,7 +339,7 @@ export default function move(gameState) {
     return { score: total > 0 ? mine / total : 0, counts, total };
   }
 
-  // ─── CUTOFF ──────────────────────────────────────────────────────────────────
+ 
   function cutoffScore(pos) {
     if (!weAreBiggest) return 0;
     let totalCutoff = 0;
@@ -366,7 +356,7 @@ export default function move(gameState) {
     return totalCutoff;
   }
 
-  // ─── MINIMAX (1v1 only) ──────────────────────────────────────────────────────
+  
   function minimaxEval(mHead, mBody, eHead, eBody, mHealth, eHealth, depth, alpha, beta, maximising) {
     const mAlive = inBounds(mHead.x, mHead.y);
     const eAlive = inBounds(eHead.x, eHead.y);
@@ -447,7 +437,7 @@ export default function move(gameState) {
     }
   }
 
-  // ─── FOOD TARGETING ──────────────────────────────────────────────────────────
+  
   function scoreFoodItems(reachableFood) {
     if (reachableFood.length === 0) return null;
     return reachableFood.reduce((best, f) => {
@@ -532,7 +522,7 @@ export default function move(gameState) {
 
   const targetBoost = myHealth < 30 ? 0.35 : 0;
 
-  // ─── SCORE EACH SAFE MOVE ────────────────────────────────────────────────────
+  
   const scores = {};
 
   for (const dir of safeMoves) {
@@ -563,11 +553,11 @@ export default function move(gameState) {
 
     let score = wF * floodScore + wV * voronoi + wT * targetScore + wM * mmNorm + wC * cutoff;
 
-    // Kill-zone bonus (we're bigger, drive into them), but NOT if it was hard-blocked above
+    
     if (h2hKill.has(key(pos.x, pos.y))) {
       score += 0.30;
     }
-    // h2hRisk: still penalise even if we allowed the move (edge case: no other options)
+   
     if (h2hRisk.has(key(pos.x, pos.y))) {
       score -= 0.25;
     }
@@ -610,5 +600,3 @@ export default function move(gameState) {
 
 //source https://youtu.be/Bxdt6T_1qgc?si=IiSDRa5G9pYBIl7d
 // and https://docs.battlesnake.com/guides/useful-algorithms
-
-
